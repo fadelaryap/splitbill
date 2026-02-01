@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import { format } from 'date-fns'
 import ReceiptScanner from '@/components/ReceiptScanner'
+import { formatCurrency, parseCurrency } from '@/lib/currency'
 
 interface Participant {
   id: string
@@ -33,6 +34,16 @@ interface Participant {
   } | null
 }
 
+interface ExpenseItem {
+  id: string
+  name: string
+  quantity: number
+  price: number
+  taxAmount: number
+  participantId: string
+  participant: Participant
+}
+
 interface ExpenseParticipant {
   id: string
   amount: number
@@ -42,12 +53,15 @@ interface ExpenseParticipant {
 interface Expense {
   id: string
   title: string
-  amount: number
+  date?: string
   taxAmount: number
   taxIncluded: boolean
   description: string | null
   createdAt: string
-  participants: ExpenseParticipant[]
+  items?: ExpenseItem[]
+  participants?: ExpenseParticipant[]
+  // Backward compatibility
+  amount?: number
 }
 
 interface SplitBill {
@@ -74,11 +88,17 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
   const [newParticipantName, setNewParticipantName] = useState('')
   const [newParticipantEmail, setNewParticipantEmail] = useState('')
   const [expenseTitle, setExpenseTitle] = useState('')
-  const [expenseAmount, setExpenseAmount] = useState('')
+  const [expenseDate, setExpenseDate] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const [expenseItems, setExpenseItems] = useState<Array<{
+    name: string
+    quantity: number
+    price: string
+    taxAmount: string
+    participantId: string
+  }>>([])
   const [expenseTaxAmount, setExpenseTaxAmount] = useState('')
   const [expenseTaxIncluded, setExpenseTaxIncluded] = useState(false)
   const [expenseDescription, setExpenseDescription] = useState('')
-  const [selectedParticipants, setSelectedParticipants] = useState<string[]>([])
   const [error, setError] = useState('')
   const [showScanner, setShowScanner] = useState(false)
 
@@ -204,30 +224,38 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
     e.preventDefault()
     setError('')
 
-    if (!expenseTitle || !expenseAmount || selectedParticipants.length === 0) {
-      setError('Please fill all required fields and select at least one participant')
+    if (!expenseTitle || expenseItems.length === 0) {
+      setError('Please fill title and add at least one item')
       return
     }
 
-    const amount = parseFloat(expenseAmount)
-    const taxAmount = parseFloat(expenseTaxAmount) || 0
-
-    if (isNaN(amount) || amount <= 0) {
-      setError('Invalid amount')
-      return
+    // Validate all items
+    for (const item of expenseItems) {
+      if (!item.name || !item.participantId || !item.price || parseFloat(item.price) <= 0) {
+        setError('All items must have name, participant, and valid price')
+        return
+      }
     }
 
     try {
+      const items = expenseItems.map(item => ({
+        name: item.name,
+        quantity: item.quantity || 1,
+        price: parseCurrency(item.price),
+        taxAmount: parseCurrency(item.taxAmount || '0'),
+        participantId: item.participantId,
+      }))
+
       const res = await fetch(`/api/splitbills/${splitBillId}/expenses`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: expenseTitle,
-          amount: expenseTaxIncluded ? amount - taxAmount : amount,
-          taxAmount,
+          date: expenseDate,
+          items,
+          taxAmount: parseCurrency(expenseTaxAmount || '0'),
           taxIncluded: expenseTaxIncluded,
           description: expenseDescription || null,
-          participantIds: selectedParticipants,
         }),
       })
 
@@ -236,17 +264,42 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
         throw new Error(data.error || 'Failed to add expense')
       }
 
+      // Reset form
       setExpenseTitle('')
-      setExpenseAmount('')
+      setExpenseDate(format(new Date(), 'yyyy-MM-dd'))
+      setExpenseItems([])
       setExpenseTaxAmount('')
       setExpenseTaxIncluded(false)
       setExpenseDescription('')
-      setSelectedParticipants([])
       setShowAddExpense(false)
       fetchSplitBill()
     } catch (err: any) {
       setError(err.message)
     }
+  }
+
+  const addExpenseItem = () => {
+    if (!splitBill || splitBill.participants.length === 0) {
+      setError('Please add participants first')
+      return
+    }
+    setExpenseItems([...expenseItems, {
+      name: '',
+      quantity: 1,
+      price: '',
+      taxAmount: '',
+      participantId: splitBill.participants[0].id,
+    }])
+  }
+
+  const updateExpenseItem = (index: number, field: string, value: any) => {
+    const updated = [...expenseItems]
+    updated[index] = { ...updated[index], [field]: value }
+    setExpenseItems(updated)
+  }
+
+  const removeExpenseItem = (index: number) => {
+    setExpenseItems(expenseItems.filter((_, i) => i !== index))
   }
 
   const handleRemoveExpense = async (expenseId: string) => {
@@ -269,13 +322,6 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
     }
   }
 
-  const toggleParticipantSelection = (participantId: string) => {
-    setSelectedParticipants((prev) =>
-      prev.includes(participantId)
-        ? prev.filter((id) => id !== participantId)
-        : [...prev, participantId]
-    )
-  }
 
   const calculateTotal = () => {
     if (!splitBill) return { total: 0, byParticipant: {} }
@@ -283,10 +329,18 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
     const byParticipant: Record<string, number> = {}
 
     splitBill.expenses.forEach((expense) => {
-      expense.participants.forEach((ep) => {
-        byParticipant[ep.participant.id] =
-          (byParticipant[ep.participant.id] || 0) + ep.amount
-      })
+      // Calculate from items if available, otherwise use participants (backward compatibility)
+      if (expense.items && expense.items.length > 0) {
+        expense.items.forEach((item) => {
+          const itemTotal = (item.price * item.quantity) + (item.taxAmount || 0)
+          byParticipant[item.participantId] = (byParticipant[item.participantId] || 0) + itemTotal
+        })
+      } else if (expense.participants) {
+        expense.participants.forEach((ep) => {
+          byParticipant[ep.participant.id] =
+            (byParticipant[ep.participant.id] || 0) + ep.amount
+        })
+      }
     })
 
     const total = Object.values(byParticipant).reduce((sum, val) => sum + val, 0)
@@ -484,129 +538,215 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
 
           {showAddExpense && (
             <form onSubmit={handleAddExpense} className="border-t pt-4 mt-4 space-y-4">
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Title <span className="text-red-500">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowScanner(true)}
+                      className="flex items-center gap-1 px-2 py-1 text-xs bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 transition-all shadow-md"
+                    >
+                      <Camera className="w-3 h-3" />
+                      Scan
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={expenseTitle}
+                    onChange={(e) => setExpenseTitle(e.target.value)}
+                    required
+                    className="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-900"
+                    placeholder="e.g., Warung Makan ABC"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Date <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="date"
+                      value={expenseDate}
+                      onChange={(e) => setExpenseDate(e.target.value)}
+                      required
+                      className="w-full pl-10 pr-4 py-2 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-900"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Items Section */}
               <div>
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center justify-between mb-3">
                   <label className="block text-sm font-medium text-gray-700">
-                    Title <span className="text-red-500">*</span>
+                    Items <span className="text-red-500">*</span>
                   </label>
                   <button
                     type="button"
-                    onClick={() => setShowScanner(true)}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm bg-primary-100 text-primary-700 rounded-lg hover:bg-primary-200 transition-colors"
+                    onClick={addExpenseItem}
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors shadow-sm"
                   >
-                    <Camera className="w-4 h-4" />
-                    Scan Receipt
+                    <Plus className="w-4 h-4" />
+                    Add Item
                   </button>
                 </div>
-                <input
-                  type="text"
-                  value={expenseTitle}
-                  onChange={(e) => setExpenseTitle(e.target.value)}
-                  required
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900"
-                  placeholder="e.g., Dinner, Hotel, etc."
-                />
+                <div className="space-y-3 max-h-96 overflow-y-auto p-3 bg-gray-50 rounded-lg border-2 border-gray-200">
+                  {expenseItems.length === 0 ? (
+                    <div className="text-center py-6 text-gray-500">
+                      <Receipt className="w-12 h-12 mx-auto mb-2 text-gray-400" />
+                      <p>No items yet. Click "Add Item" to start.</p>
+                    </div>
+                  ) : (
+                    expenseItems.map((item, index) => (
+                      <div key={index} className="bg-white p-4 rounded-lg border-2 border-gray-200 shadow-sm">
+                        <div className="flex items-start justify-between mb-3">
+                          <span className="text-sm font-semibold text-primary-600">Item {index + 1}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeExpenseItem(index)}
+                            className="p-1 text-red-500 hover:bg-red-50 rounded transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="grid sm:grid-cols-2 gap-3">
+                          <div className="sm:col-span-2">
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Item Name</label>
+                            <input
+                              type="text"
+                              value={item.name}
+                              onChange={(e) => updateExpenseItem(index, 'name', e.target.value)}
+                              required
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-900 text-sm"
+                              placeholder="e.g., Ikan Bakar"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Quantity</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={item.quantity}
+                              onChange={(e) => updateExpenseItem(index, 'quantity', parseInt(e.target.value) || 1)}
+                              required
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-900 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Price (Rp)</label>
+                            <input
+                              type="text"
+                              value={item.price}
+                              onChange={(e) => updateExpenseItem(index, 'price', e.target.value)}
+                              required
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-900 text-sm"
+                              placeholder="30000"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Tax (Rp)</label>
+                            <input
+                              type="text"
+                              value={item.taxAmount}
+                              onChange={(e) => updateExpenseItem(index, 'taxAmount', e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-900 text-sm"
+                              placeholder="0"
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <label className="block text-xs font-medium text-gray-600 mb-1">Assigned To</label>
+                            <select
+                              value={item.participantId}
+                              onChange={(e) => updateExpenseItem(index, 'participantId', e.target.value)}
+                              required
+                              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-900 text-sm"
+                            >
+                              {splitBill.participants.map((p) => (
+                                <option key={p.id} value={p.id}>{p.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          {item.price && item.quantity && (
+                            <div className="sm:col-span-2 text-right">
+                              <span className="text-xs text-gray-500">Subtotal: </span>
+                              <span className="font-semibold text-primary-600">
+                                {formatCurrency((parseCurrency(item.price) * (item.quantity || 1)) + parseCurrency(item.taxAmount || '0'))}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
 
               <div className="grid sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Amount <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={expenseAmount}
-                      onChange={(e) => setExpenseAmount(e.target.value)}
-                      required
-                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900"
-                      placeholder="0.00"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Tax Amount
+                    Additional Tax (Rp)
                   </label>
                   <div className="relative">
                     <Percent className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                     <input
-                      type="number"
-                      step="0.01"
+                      type="text"
                       value={expenseTaxAmount}
                       onChange={(e) => setExpenseTaxAmount(e.target.value)}
-                      className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900"
-                      placeholder="0.00"
+                      className="w-full pl-10 pr-4 py-2 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-900"
+                      placeholder="0"
                     />
                   </div>
                 </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="taxIncluded"
-                  checked={expenseTaxIncluded}
-                  onChange={(e) => setExpenseTaxIncluded(e.target.checked)}
-                  className="w-4 h-4 text-primary-600 rounded focus:ring-primary-500"
-                />
-                <label htmlFor="taxIncluded" className="text-sm text-gray-700">
-                  Tax included in amount
-                </label>
+                <div className="flex items-center gap-2 pt-6">
+                  <input
+                    type="checkbox"
+                    id="taxIncluded"
+                    checked={expenseTaxIncluded}
+                    onChange={(e) => setExpenseTaxIncluded(e.target.checked)}
+                    className="w-4 h-4 text-primary-600 rounded focus:ring-primary-500"
+                  />
+                  <label htmlFor="taxIncluded" className="text-sm text-gray-700">
+                    Tax included in total
+                  </label>
+                </div>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Description
                 </label>
-                  <textarea
+                <textarea
                   value={expenseDescription}
                   onChange={(e) => setExpenseDescription(e.target.value)}
                   rows={2}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-gray-900"
+                  className="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-gray-900"
                   placeholder="Optional description..."
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Split Between <span className="text-red-500">*</span>
-                </label>
-                <div className="grid gap-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
-                  {splitBill.participants.map((participant) => (
-                    <button
-                      key={participant.id}
-                      type="button"
-                      onClick={() => toggleParticipantSelection(participant.id)}
-                      className={`flex items-center justify-between p-2 rounded-lg transition-colors ${
-                        selectedParticipants.includes(participant.id)
-                          ? 'bg-primary-100 border-2 border-primary-500'
-                          : 'bg-gray-50 border-2 border-transparent hover:bg-gray-100'
-                      }`}
-                    >
-                      <span className="font-medium">{participant.name}</span>
-                      {selectedParticipants.includes(participant.id) && (
-                        <Check className="w-5 h-5 text-primary-600" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex gap-4">
+              <div className="flex gap-4 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddExpense(false)}
-                  className="flex-1 px-4 py-2 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors"
+                  onClick={() => {
+                    setShowAddExpense(false)
+                    setExpenseItems([])
+                    setExpenseTitle('')
+                    setExpenseDate(format(new Date(), 'yyyy-MM-dd'))
+                    setExpenseDescription('')
+                    setExpenseTaxAmount('')
+                    setExpenseTaxIncluded(false)
+                  }}
+                  className="flex-1 px-4 py-2.5 border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg font-semibold hover:bg-primary-700 transition-colors"
+                  className="flex-1 px-4 py-2.5 bg-gradient-to-r from-primary-600 to-primary-700 text-white rounded-lg font-semibold hover:from-primary-700 hover:to-primary-800 transition-all shadow-lg"
                 >
                   Add Expense
                 </button>
@@ -616,74 +756,119 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
 
           <div className="space-y-4 mt-4">
             {splitBill.expenses.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                No expenses yet. Add your first expense!
+              <div className="text-center py-12 text-gray-500">
+                <Receipt className="w-16 h-16 mx-auto mb-3 text-gray-400" />
+                <p className="text-lg font-medium">No expenses yet</p>
+                <p className="text-sm">Add your first expense to get started!</p>
               </div>
             ) : (
               splitBill.expenses.map((expense) => {
-                const totalExpense = expense.taxIncluded
-                  ? expense.amount + expense.taxAmount
-                  : expense.amount + expense.taxAmount
+                // Calculate totals from items if available
+                let totalExpense = 0
+                const itemsTotal = expense.items && expense.items.length > 0
+                  ? expense.items.reduce((sum, item) => sum + (item.price * item.quantity) + (item.taxAmount || 0), 0)
+                  : 0
+                
+                if (itemsTotal > 0) {
+                  totalExpense = itemsTotal + (expense.taxAmount || 0)
+                } else {
+                  // Backward compatibility
+                  totalExpense = expense.taxIncluded
+                    ? (expense as any).amount + expense.taxAmount
+                    : (expense as any).amount + expense.taxAmount
+                }
+
                 return (
                   <div
                     key={expense.id}
-                    className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                    className="bg-gradient-to-br from-white to-gray-50 border-2 border-gray-200 rounded-xl p-5 hover:shadow-lg transition-all"
                   >
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <h3 className="font-semibold text-lg text-gray-900">
-                          {expense.title}
-                        </h3>
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg flex items-center justify-center shadow-md">
+                            <Receipt className="w-5 h-5 text-white" />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-lg text-gray-900">
+                              {expense.title}
+                            </h3>
+                            <div className="flex items-center gap-2 text-xs text-gray-500">
+                              <Calendar className="w-3 h-3" />
+                              <span>{format(new Date(expense.date || expense.createdAt), 'MMM d, yyyy')}</span>
+                            </div>
+                          </div>
+                        </div>
                         {expense.description && (
-                          <p className="text-sm text-gray-600 mt-1">
+                          <p className="text-sm text-gray-600 mt-2 ml-12">
                             {expense.description}
                           </p>
                         )}
                       </div>
                       <button
                         onClick={() => handleRemoveExpense(expense.id)}
-                        className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors"
+                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
                       >
-                        <X className="w-4 h-4" />
+                        <X className="w-5 h-5" />
                       </button>
                     </div>
-                    <div className="flex flex-wrap gap-4 text-sm">
-                      <div>
-                        <span className="text-gray-500">Base:</span>{' '}
-                        <span className="font-medium">
-                          ${expense.amount.toFixed(2)}
-                        </span>
-                      </div>
-                      {expense.taxAmount > 0 && (
-                        <div>
-                          <span className="text-gray-500">Tax:</span>{' '}
-                          <span className="font-medium">
-                            ${expense.taxAmount.toFixed(2)}
-                          </span>
-                          {expense.taxIncluded && (
-                            <span className="text-xs text-gray-500 ml-1">(included)</span>
-                          )}
-                        </div>
-                      )}
-                      <div>
-                        <span className="text-gray-500">Total:</span>{' '}
-                        <span className="font-semibold text-primary-600">
-                          ${totalExpense.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="mt-3 pt-3 border-t">
-                      <div className="text-xs text-gray-500 mb-2">Split between:</div>
-                      <div className="flex flex-wrap gap-2">
-                        {expense.participants.map((ep) => (
-                          <div
-                            key={ep.id}
-                            className="px-2 py-1 bg-primary-50 rounded text-xs font-medium text-primary-700"
-                          >
-                            {ep.participant.name}: ${ep.amount.toFixed(2)}
+
+                    {/* Items List */}
+                    {expense.items && expense.items.length > 0 ? (
+                      <div className="mb-4 ml-12 space-y-2">
+                        {expense.items.map((item, idx) => (
+                          <div key={idx} className="flex items-center justify-between p-2 bg-white rounded-lg border border-gray-200">
+                            <div className="flex-1">
+                              <div className="font-medium text-gray-900">{item.name}</div>
+                              <div className="text-xs text-gray-500">
+                                {item.quantity}x × {formatCurrency(item.price)}
+                                {item.taxAmount > 0 && ` + Pajak ${formatCurrency(item.taxAmount)}`}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-semibold text-primary-600">
+                                {formatCurrency((item.price * item.quantity) + (item.taxAmount || 0))}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {expense.items?.find(i => i.participantId === item.participantId)?.participant.name || 'Unknown'}
+                              </div>
+                            </div>
                           </div>
                         ))}
                       </div>
+                    ) : (
+                      // Backward compatibility - show participants
+                      expense.participants && expense.participants.length > 0 && (
+                        <div className="mb-4 ml-12">
+                          <div className="text-xs text-gray-500 mb-2">Split between:</div>
+                          <div className="flex flex-wrap gap-2">
+                            {expense.participants.map((ep) => (
+                              <div
+                                key={ep.id}
+                                className="px-3 py-1.5 bg-primary-100 rounded-lg text-xs font-medium text-primary-700 border border-primary-200"
+                              >
+                                {ep.participant.name}: {formatCurrency(ep.amount)}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    )}
+
+                    {/* Total */}
+                    <div className="ml-12 pt-3 border-t border-gray-200">
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-medium text-gray-700">Total Expense:</span>
+                        <span className="text-xl font-bold text-primary-600">
+                          {formatCurrency(totalExpense)}
+                        </span>
+                      </div>
+                      {expense.taxAmount > 0 && (
+                        <div className="text-xs text-gray-500 mt-1">
+                          Additional Tax: {formatCurrency(expense.taxAmount)}
+                          {expense.taxIncluded && ' (included)'}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )
@@ -699,24 +884,26 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
             Summary
           </h2>
           <div className="space-y-2">
-            <div className="flex justify-between text-lg">
+            <div className="flex justify-between text-lg mb-4">
               <span>Total Amount:</span>
-              <span className="font-bold">${total.toFixed(2)}</span>
+              <span className="font-bold text-2xl">{formatCurrency(total)}</span>
             </div>
             <div className="pt-4 border-t border-primary-400">
-              <div className="text-sm font-medium mb-2">Per Participant:</div>
-              {Object.entries(byParticipant).map(([participantId, amount]) => {
-                const participant = splitBill.participants.find((p) => p.id === participantId)
-                return (
-                  <div
-                    key={participantId}
-                    className="flex justify-between py-1"
-                  >
-                    <span>{participant?.name || 'Unknown'}:</span>
-                    <span className="font-semibold">${amount.toFixed(2)}</span>
-                  </div>
-                )
-              })}
+              <div className="text-sm font-medium mb-3">Per Participant:</div>
+              <div className="space-y-2">
+                {Object.entries(byParticipant).map(([participantId, amount]) => {
+                  const participant = splitBill.participants.find((p) => p.id === participantId)
+                  return (
+                    <div
+                      key={participantId}
+                      className="flex justify-between items-center py-2 px-3 bg-white bg-opacity-20 rounded-lg"
+                    >
+                      <span className="font-medium">{participant?.name || 'Unknown'}:</span>
+                      <span className="font-bold">{formatCurrency(amount)}</span>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           </div>
         </div>
@@ -726,7 +913,16 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
           <ReceiptScanner
             onScanComplete={(data) => {
               setExpenseTitle(data.title)
-              setExpenseAmount(data.amount)
+              // Create an item from scanned data
+              if (data.amount && splitBill && splitBill.participants.length > 0) {
+                setExpenseItems([{
+                  name: 'Scanned Item',
+                  quantity: 1,
+                  price: data.amount,
+                  taxAmount: data.taxAmount || '',
+                  participantId: splitBill.participants[0].id,
+                }])
+              }
               if (data.taxAmount) {
                 setExpenseTaxAmount(data.taxAmount)
                 setExpenseTaxIncluded(true)

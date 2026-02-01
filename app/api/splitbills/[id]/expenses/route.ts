@@ -16,13 +16,30 @@ export async function POST(req: NextRequest) {
     }
 
     const splitBillId = req.url.split('/').slice(-2)[0]
-    const { title, amount, taxAmount, taxIncluded, description, participantIds } = await req.json()
+    const { 
+      title, 
+      date, 
+      items, // Array of { name, quantity, price, taxAmount, participantId }
+      taxAmount, 
+      taxIncluded, 
+      description 
+    } = await req.json()
 
-    if (!title || !amount || !participantIds || participantIds.length === 0) {
+    if (!title || !items || !Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'Missing required fields: title and items' },
         { status: 400 }
       )
+    }
+
+    // Validate items
+    for (const item of items) {
+      if (!item.name || !item.participantId || item.price === undefined || item.quantity === undefined) {
+        return NextResponse.json(
+          { error: 'Each item must have: name, quantity, price, and participantId' },
+          { status: 400 }
+        )
+      }
     }
 
     // Verify user has access to this split bill
@@ -54,36 +71,93 @@ export async function POST(req: NextRequest) {
 
     // Verify all participant IDs belong to this split bill
     const validParticipantIds = splitBill.participants.map(p => p.id)
-    const invalidIds = participantIds.filter((id: string) => !validParticipantIds.includes(id))
+    const itemParticipantIds = items.map((item: any) => item.participantId)
+    const invalidIds = itemParticipantIds.filter((id: string) => !validParticipantIds.includes(id))
 
     if (invalidIds.length > 0) {
       return NextResponse.json(
-        { error: 'Invalid participant IDs' },
+        { error: 'Invalid participant IDs in items' },
         { status: 400 }
       )
     }
 
-    // Calculate amount per participant
-    const totalAmount = taxIncluded ? amount : amount + (taxAmount || 0)
-    const amountPerParticipant = totalAmount / participantIds.length
+    // Parse date or use current date
+    const expenseDate = date ? new Date(date) : new Date()
 
-    // Create expense
+    // Create expense with items
     const expense = await prisma.expense.create({
       data: {
         splitBillId,
         title,
-        amount: taxIncluded ? amount - (taxAmount || 0) : amount,
+        date: expenseDate,
         taxAmount: taxAmount || 0,
         taxIncluded: taxIncluded || false,
         description: description || null,
-        participants: {
-          create: participantIds.map((participantId: string) => ({
-            participantId,
-            amount: amountPerParticipant,
+        items: {
+          create: items.map((item: any) => ({
+            name: item.name,
+            quantity: item.quantity || 1,
+            price: item.price,
+            taxAmount: item.taxAmount || 0,
+            participantId: item.participantId,
           })),
         },
       },
       include: {
+        items: {
+          include: {
+            participant: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    })
+
+    // Calculate totals per participant for backward compatibility (ExpenseParticipant)
+    const participantTotals: Record<string, number> = {}
+    expense.items.forEach((item) => {
+      const total = (item.price * item.quantity) + (item.taxAmount || 0)
+      participantTotals[item.participantId] = (participantTotals[item.participantId] || 0) + total
+    })
+
+    // Create ExpenseParticipant records for backward compatibility
+    await prisma.expenseParticipant.createMany({
+      data: Object.entries(participantTotals).map(([participantId, amount]) => ({
+        expenseId: expense.id,
+        participantId,
+        amount,
+      })),
+      skipDuplicates: true,
+    })
+
+    // Fetch expense with all relations
+    const expenseWithParticipants = await prisma.expense.findUnique({
+      where: { id: expense.id },
+      include: {
+        items: {
+          include: {
+            participant: {
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                  },
+                },
+              },
+            },
+          },
+        },
         participants: {
           include: {
             participant: {
@@ -102,7 +176,7 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    return NextResponse.json({ expense })
+    return NextResponse.json({ expense: expenseWithParticipants })
   } catch (error: any) {
     console.error('Create expense error:', error)
     return NextResponse.json(

@@ -57,14 +57,39 @@ export async function GET(req: NextRequest) {
         },
         expenses: {
           include: {
+            items: {
+              include: {
+                participant: {
+                  include: {
+                    user: {
+                      select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
             participants: {
               include: {
-                participant: true,
+                participant: {
+                  include: {
+                    user: {
+                      select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                      },
+                    },
+                  },
+                },
               },
             },
           },
           orderBy: {
-            createdAt: 'desc',
+            date: 'desc',
           },
         },
       },

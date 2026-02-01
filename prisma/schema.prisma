@@ -46,6 +46,7 @@ model SplitBillParticipant {
   
   splitBill   SplitBill @relation(fields: [splitBillId], references: [id], onDelete: Cascade)
   user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  expenseItems ExpenseItem[]
   expenses    ExpenseParticipant[]
   
   @@unique([splitBillId, userId])
@@ -57,17 +58,38 @@ model Expense {
   id          String   @id @default(cuid())
   splitBillId String
   title       String
-  amount      Float
+  description String?
+  date        DateTime @default(now())
   taxAmount   Float    @default(0)
   taxIncluded Boolean  @default(false)
-  description String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   
   splitBill   SplitBill @relation(fields: [splitBillId], references: [id], onDelete: Cascade)
-  participants ExpenseParticipant[]
+  items       ExpenseItem[]
+  
+  // Calculated total from items
+  @@index([splitBillId])
 }
 
+model ExpenseItem {
+  id          String   @id @default(cuid())
+  expenseId   String
+  name        String
+  quantity    Int      @default(1)
+  price       Float
+  taxAmount   Float    @default(0)
+  participantId String
+  createdAt   DateTime @default(now())
+  
+  expense     Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  participant SplitBillParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  
+  @@index([expenseId])
+  @@index([participantId])
+}
+
+// Keep ExpenseParticipant for backward compatibility, but it's now calculated from ExpenseItem
 model ExpenseParticipant {
   id          String   @id @default(cuid())
   expenseId   String
