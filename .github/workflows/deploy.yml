@@ -39,7 +39,7 @@ jobs:
           cp package.json deploy/
           cp package-lock.json deploy/ 2>/dev/null || true
           cp next.config.js deploy/
-          cp .env.example deploy/
+          cp .env.example deploy/ 2>/dev/null || echo "DATABASE_URL=\"file:./prod.db\"\nJWT_SECRET=\"change-this-in-production\"\nNEXTAUTH_URL=\"https://indomiekor.net\"" > deploy/.env.example
           tar -czf deploy.tar.gz -C deploy .
 
       - name: Deploy to VPS
@@ -60,10 +60,25 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || 22 }}
           script: |
-            cd /var/www/splitbill-app || mkdir -p /var/www/splitbill-app && cd /var/www/splitbill-app
+            # Setup application directory (try /var/www first, fallback to home directory)
+            APP_DIR="/var/www/splitbill-app"
+            if [ ! -d "$APP_DIR" ] || [ ! -w "$APP_DIR" ]; then
+              # Use home directory if /var/www is not accessible
+              APP_DIR="$HOME/splitbill-app"
+              mkdir -p "$APP_DIR"
+            fi
+            
+            cd "$APP_DIR"
             
             # Extract new deployment
             tar -xzf /tmp/deploy.tar.gz -C .
+            
+            # Create .env file if it doesn't exist
+            if [ ! -f .env ]; then
+              echo "DATABASE_URL=\"file:./prod.db\"" > .env
+              echo "JWT_SECRET=\"${{ secrets.JWT_SECRET }}\"" >> .env
+              echo "NEXTAUTH_URL=\"${{ secrets.NEXTAUTH_URL }}\"" >> .env
+            fi
             
             # Install/update dependencies
             npm ci --production
