@@ -29,3 +29,4 @@ export function parseCurrency(value: string): number {
   return parseFloat(cleaned) || 0
 }
 
+

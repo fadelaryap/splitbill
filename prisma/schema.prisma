@@ -55,18 +55,21 @@ model SplitBillParticipant {
 }
 
 model Expense {
-  id          String   @id @default(cuid())
-  splitBillId String
-  title       String
-  description String?
-  date        DateTime @default(now())
-  taxAmount   Float    @default(0)
-  taxIncluded Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String   @id @default(cuid())
+  splitBillId   String
+  title         String
+  description   String?
+  date          DateTime @default(now())
+  taxAmount     Float    @default(0)
+  taxIncluded   Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
   
-  splitBill   SplitBill @relation(fields: [splitBillId], references: [id], onDelete: Cascade)
-  items       ExpenseItem[]
+  splitBill     SplitBill @relation(fields: [splitBillId], references: [id], onDelete: Cascade)
+  items         ExpenseItem[]
+  
+  // TAMBAHKAN BARIS INI:
+  participants  ExpenseParticipant[]  
   
   // Calculated total from items
   @@index([splitBillId])

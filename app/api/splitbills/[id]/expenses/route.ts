@@ -136,7 +136,6 @@ export async function POST(req: NextRequest) {
         participantId,
         amount,
       })),
-      skipDuplicates: true,
     })
 
     // Fetch expense with all relations

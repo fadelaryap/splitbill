@@ -598,7 +598,7 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
                   {expenseItems.length === 0 ? (
                     <div className="text-center py-6 text-gray-500">
                       <Receipt className="w-12 h-12 mx-auto mb-2 text-gray-400" />
-                      <p>No items yet. Click "Add Item" to start.</p>
+                      <p>No items yet. Click &quot;Add Item&quot; to start.</p>
                     </div>
                   ) : (
                     expenseItems.map((item, index) => (
