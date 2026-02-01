@@ -90,7 +90,7 @@ jobs:
             npx prisma db push --skip-generate || true
             
             # Restart application with PM2
-            pm2 restart splitbill-app || pm2 start npm --name "splitbill-app" -- start
+            pm2 restart splitbill-app 2>/dev/null || pm2 start npm --name "splitbill-app" -- start
             
             # Save PM2 configuration
             pm2 save

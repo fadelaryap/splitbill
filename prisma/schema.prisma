@@ -83,3 +83,4 @@ model ExpenseParticipant {
   @@index([participantId])
 }
 
+

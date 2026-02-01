@@ -61,3 +61,4 @@ echo "9. Run: sudo nginx -t"
 echo "10. Run: sudo certbot --nginx -d indomiekor.net -d www.indomiekor.net"
 echo "11. Run: sudo systemctl restart nginx"
 
+

@@ -16,3 +16,4 @@ export default async function SplitBillDetailPage({
   return <SplitBillDetailClient splitBillId={params.id} />
 }
 
+
