@@ -41,12 +41,18 @@ export async function getCurrentUser(): Promise<UserPayload | null> {
 
 export async function setAuthToken(token: string) {
   const cookieStore = await cookies()
+  // Check if we're in production - either via NODE_ENV or by checking if we have production domain
+  const isProduction = process.env.NODE_ENV === 'production' || 
+                       process.env.NEXTAUTH_URL?.includes('https://')
+  
   cookieStore.set('auth-token', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: isProduction, // true in production (HTTPS via Cloudflare)
     sameSite: 'lax',
     maxAge: 60 * 60 * 24 * 7, // 7 days
     path: '/',
+    // Don't set domain explicitly - let browser use current domain
+    // This ensures cookie works for both indomiekor.net and www.indomiekor.net
   })
 }
 
