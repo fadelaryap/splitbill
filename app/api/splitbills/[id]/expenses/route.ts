@@ -168,5 +168,5 @@ export async function DELETE(req: NextRequest) {
       { status: 500 }
     )
   }
-})
+}
 

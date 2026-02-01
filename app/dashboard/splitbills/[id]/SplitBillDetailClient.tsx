@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -82,11 +82,7 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
   const [error, setError] = useState('')
   const [showScanner, setShowScanner] = useState(false)
 
-  useEffect(() => {
-    fetchSplitBill()
-  }, [splitBillId])
-
-  const fetchSplitBill = async () => {
+  const fetchSplitBill = useCallback(async () => {
     try {
       const res = await fetch(`/api/splitbills/${splitBillId}`)
       const data = await res.json()
@@ -101,7 +97,11 @@ export default function SplitBillDetailClient({ splitBillId }: { splitBillId: st
     } finally {
       setLoading(false)
     }
-  }
+  }, [splitBillId])
+
+  useEffect(() => {
+    fetchSplitBill()
+  }, [fetchSplitBill])
 
   const searchUsers = async (query: string) => {
     if (query.length < 2) {

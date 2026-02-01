@@ -221,6 +221,7 @@ export default function ReceiptScanner({ onScanComplete, onClose }: ReceiptScann
 
           {preview && (
             <div className="space-y-4">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={preview}
                 alt="Receipt preview"
