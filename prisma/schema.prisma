@@ -1,0 +1,85 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email    String   @unique
+  name     String
+  password String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  splitBills SplitBillParticipant[]
+  createdSplitBills SplitBill[]
+}
+
+model SplitBill {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  creator     User     @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  participants SplitBillParticipant[]
+  expenses    Expense[]
+}
+
+model SplitBillParticipant {
+  id          String   @id @default(cuid())
+  splitBillId String
+  userId      String?
+  name        String
+  email       String?
+  isRegistered Boolean @default(false)
+  createdAt   DateTime @default(now())
+  
+  splitBill   SplitBill @relation(fields: [splitBillId], references: [id], onDelete: Cascade)
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  expenses    ExpenseParticipant[]
+  
+  @@unique([splitBillId, userId])
+  @@index([splitBillId])
+  @@index([userId])
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  splitBillId String
+  title       String
+  amount      Float
+  taxAmount   Float    @default(0)
+  taxIncluded Boolean  @default(false)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  splitBill   SplitBill @relation(fields: [splitBillId], references: [id], onDelete: Cascade)
+  participants ExpenseParticipant[]
+}
+
+model ExpenseParticipant {
+  id          String   @id @default(cuid())
+  expenseId   String
+  participantId String
+  amount      Float
+  createdAt   DateTime @default(now())
+  
+  expense     Expense  @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  participant SplitBillParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  
+  @@unique([expenseId, participantId])
+  @@index([expenseId])
+  @@index([participantId])
+}
+
